@@ -1,0 +1,36 @@
+{
+  "comment": "看板娘控制小组件配置。所有路径均相对于本文件所在目录（即 mascot/<id>/controls/）。字段说明：gap=与看板娘的间距（逻辑像素）；spacing=按钮之间的间距（逻辑像素）；icon_size=图标渲染尺寸，可只填宽度一项（自动等比）；frame_height=外框（按钮）高度（逻辑像素），最小合法值为 28，小于该值会自动钳到 28；color=矢量图标统一着色（仅对 SVG 等矢量图生效，位图原样显示，收藏按钮除外）；background=未提供底图时自动生成的圆角矩形底色（支持 #RRGGBB / rgba()，含透明度）；bg_image=可选底图（如 'bg_rect.svg'，相对本目录），宽度自适应按内容缩放，留空则用 background 生成的圆角矩形。buttons 中每项：type=(play_pause=播放/暂停, prev=上一首, next=下一首, favorite=收藏)；icon=普通态图标，icon_alt=激活态图标（可选，play_pause/favorite 切换时显示），均可使用常见位图(png/jpg)或矢量图(svg)，路径均相对本目录。",
+  "gap": 12,
+  "spacing": 10,
+  "icon_size": {
+    "width": 25
+  },
+  "frame_height": 40,
+  "color": "#5c9fe4",
+  "background": "rgba(20,20,20,150)",
+  "bg_image": "bg_rect.svg",
+  "buttons": [
+    {
+      "type": "prev",
+      "icon": "prev.svg",
+      "tooltip": "上一首"
+    },
+    {
+      "type": "play_pause",
+      "icon": "play.svg",
+      "icon_alt": "pause.svg",
+      "tooltip": "播放/暂停"
+    },
+    {
+      "type": "next",
+      "icon": "next.svg",
+      "tooltip": "下一首"
+    },
+    {
+      "type": "favorite",
+      "icon": "dislike.svg",
+      "icon_alt": "like.svg",
+      "tooltip": "收藏/取消收藏"
+    }
+  ]
+}

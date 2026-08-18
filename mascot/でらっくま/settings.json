@@ -1,0 +1,51 @@
+{
+  "id": "02",
+  "name": "でらっくま",
+  "author": "sbga",
+  "version": "1.0.0",
+  "comment": "awmc",
+  "sprite": {
+    "image": "idle.png",
+    "height": 200
+  },
+  "dialogues": {
+    "on_play": [
+      "《{song}》要开始了哟~",
+      "加入游戏~《{song}》",
+      "《{song}》试试看吧~",
+      "《{song}》Let's go~"
+    ],
+    "on_pause": [
+      "要继续吗~",
+      "没办法前进了"
+    ],
+    "on_resume": [
+      "出发喽~",
+      "欢迎回来~"
+    ],
+    "on_favorite_add": [
+      "可玩乐曲数增加❤️",
+      "恭喜解禁~",
+      "解锁喽~"
+    ],
+    "on_favorite_remove": [
+      "人家还想要一起玩嘛~",
+      "下次再见哦~"
+    ],
+    "on_click": {
+      "lines": [
+        "哎哟~",
+        "不可以打我哟~",
+        "不要大力拍打或滑动哦~",
+        "好厉害呀，真帅气呐~"
+      ],
+      "playing_lines": [
+        "哎哟~",
+        "不可以打我哟~",
+        "不要大力拍打或滑动哦~",
+        "好厉害呀，真帅气呐~"
+      ],
+      "playing_chance": 0.6
+    }
+  }
+}

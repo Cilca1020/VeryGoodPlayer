@@ -1,0 +1,51 @@
+{
+  "id": "test",
+  "name": "test酱",
+  "author": "AI酱",
+  "version": "1.0.0",
+  "comment": "看板娘资源包配置。目录结构：脚本同级 mascot/<id>/ 下放 settings.json + 立绘图片。可复制本文件夹改名并替换立绘/对话，即可新增一个看板娘（在右键菜单『切换看板娘』中选用）。dialogues 各键含义：on_play=开始播放，on_pause=暂停，on_resume=继续，on_favorite_add/remove=收藏/取消收藏，on_click=单击看板娘（lines=待机语，playing_lines=播放中彩蛋，playing_chance=彩蛋概率）。文本中用 {song} 占位当前歌曲名。controls：看板娘下方控制小组件的配置已拆分到 controls/settings.json（与本文件同级 controls/ 子目录），未配置则不显示小组件；在右键菜单『小组件』可开关。",
+  "sprite": {
+    "image": "idle_alpha.png",
+    "height": 300
+  },
+  "dialogues": {
+    "on_play": [
+      "♪ 正在播放《{song}》",
+      "好听！这首《{song}》我很喜欢♪",
+      "《{song}》安排上了~"
+    ],
+    "on_pause": [
+      "先歇会儿~",
+      "暂停一下，耳朵也休息会儿",
+      "等你好久了~"
+    ],
+    "on_resume": [
+      "继续享受音乐♪",
+      "回来啦，接着听~",
+      "音乐不能停！"
+    ],
+    "on_favorite_add": [
+      "已加入喜欢 ❤️",
+      "这首歌值得一个红心！"
+    ],
+    "on_favorite_remove": [
+      "已取消收藏",
+      "好吧，这首先放一放~"
+    ],
+    "on_click": {
+      "lines": [
+        "今天也要加油鸭~",
+        "要听点开心的吗？",
+        "耳机戴好啦，随时待命♪",
+        "双击歌手名可以搜他的歌哦~",
+        "喜欢的话点个红心❤️",
+        "下雨天和音乐更配哦"
+      ],
+      "playing_lines": [
+        "正在听《{song}》呢♪",
+        "现在这首《{song}》超带感！"
+      ],
+      "playing_chance": 0.6
+    }
+  }
+}

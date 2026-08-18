@@ -1,0 +1,15 @@
+# VeryGoodPlayer 运行依赖
+# 安装：pip install -r requirements.txt
+
+PyQt5>=5.15
+pygame>=2.1          # 可选：本地播放（缺失时自动降级）
+requests>=2.28       # 可选：在线功能（缺失时自动降级）
+mutagen>=1.46        # 可选：读取内嵌封面/歌词（缺失时自动降级）
+
+# 在线播放（网易云）相关，缺失时在线功能不可用但程序可启动
+NeteaseCloudMusicApi>=0.0.13
+py_mini_racer>=0.6
+pycryptodome>=3.17
+
+# 缓存（歌单/封面缓存）
+diskcache>=5.6

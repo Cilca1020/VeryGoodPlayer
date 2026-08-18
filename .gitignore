@@ -1,0 +1,27 @@
+# 字节码缓存
+__pycache__/
+*.py[cod]
+*.pyc
+
+# 打包产物
+build/
+dist/
+*.spec.bak
+
+# 运行时生成的用户数据（保留目录结构可忽略内容）
+config/*.json
+songs/*
+!songs/.gitkeep
+cache/*
+!cache/.gitkeep
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
