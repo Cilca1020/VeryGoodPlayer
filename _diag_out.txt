@@ -1,0 +1,15 @@
+=== 构建(未显示)后 ===
+scroll.width: 640
+layout stored: None
+metrics now: (4, 90)
+=== show + processEvents ===
+scroll.width: 640
+layout stored: None
+metrics now: (4, 90)
+=== 再 processEvents ===
+scroll.width: 640
+layout stored: None
+=== showMaximized ===
+scroll.width: 640
+layout stored: None
+metrics now: (4, 90)

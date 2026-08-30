@@ -69,6 +69,7 @@ class MusicPlayer(QMainWindow):
         y = int((screen_h - win_h) / 2)
         self.setGeometry(x, y, win_w, win_h)
         self.setMinimumSize(int(860*self.scale), int(560*self.scale))
+        self._resize_margin = int(6 * self.scale)  # 无边框窗口边缘缩放热区宽度
         self.setWindowTitle("VeryGoodPlayer")
         # iOS风格：无边框、透明背景（配合中央容器圆角）
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowMinimizeButtonHint | Qt.WindowSystemMenuHint)
@@ -261,6 +262,15 @@ class MusicPlayer(QMainWindow):
         """)
         self._btn_min.clicked.connect(self._on_minimize_clicked)
         title_layout.addStretch(1)
+        # 最大化/还原按钮（位于最小化与关闭之间，随窗口状态切换图标）
+        self._btn_max = QPushButton()
+        self._btn_max.setFixedSize(int(22*self.scale), int(22*self.scale))
+        self._btn_max.setCursor(Qt.PointingHandCursor)
+        self._btn_max.setStyleSheet(self._btn_min.styleSheet()
+                                    + f"QPushButton {{ padding-top: {int(2*self.scale)}px; }}")
+        self._btn_max.setIconSize(QSize(int(14*self.scale), int(14*self.scale)))
+        self._sync_max_btn_icon()  # 初始为普通窗口状态：square 图标
+        self._btn_max.clicked.connect(self._toggle_maximize)
         # 关闭按钮
         self._btn_close = QPushButton("✕")
         self._btn_close.setFixedSize(int(28*self.scale), int(28*self.scale))
@@ -275,10 +285,15 @@ class MusicPlayer(QMainWindow):
         self._btn_close.clicked.connect(self.close)
         title_layout.addWidget(self._btn_min)
         title_layout.addSpacing(int(8*self.scale))
+        title_layout.addWidget(self._btn_max)
+        # 关闭按钮盒子(28)比另两个(22)宽 6px 且图标居中，视觉空隙多 3px，
+        # 间距补偿 (28-22)/2，使三按钮视觉间距一致
+        title_layout.addSpacing(int(8*self.scale) - 3)
         title_layout.addWidget(self._btn_close)
-        # 标题栏可拖拽
+        # 标题栏可拖拽 / 双击最大化还原
         self.title_bar.mousePressEvent = self._titlebar_mouse_press
         self.title_bar.mouseMoveEvent = self._titlebar_mouse_move
+        self.title_bar.mouseDoubleClickEvent = self._titlebar_mouse_dblclick
 
         # ---------- 主体 ----------
         self.body_widget = QWidget()
@@ -3656,6 +3671,7 @@ class MusicPlayer(QMainWindow):
         # 边距/间距与排行榜卡片接近，左侧留白充足避免贴边，顶部留白稍大避免首行贴边
         self._playlist_cards_grid.setContentsMargins(40, 28, 20, 20)
         self._playlist_cards_grid.setSpacing(18)  # 卡片间距
+        self._playlist_layout = None  # (列数, 卡片尺寸)，None=尚未布局，首次按宽度计算
         # 包裹滚动区
         self._playlist_cards_scroll = QScrollArea()
         self._playlist_cards_scroll.setWidgetResizable(True)
@@ -3694,23 +3710,53 @@ class MusicPlayer(QMainWindow):
         pl.addWidget(self._playlist_header, 0)
         pl.addWidget(self._playlist_cards_scroll, 1)
 
+    def _playlist_layout_metrics(self):
+        """按滚动区宽度计算歌单卡片列数与卡片尺寸（保证至少 4 列）。
+
+        - 宽窗口：卡片保持原尺寸（150*scale），按宽度增加列数；
+        - 窄窗口：4 列是保底布局，卡片等比压缩（下限 110*scale）确保放得下。
+        注意：
+        - 必须用滚动区宽度而非网格容器宽度：页面隐藏时容器会保留
+          旧尺寸（被自身最小宽度撑住），据其算列数会导致小窗口下右侧被截；
+        - 必须预留竖滚动条宽度而非直接用视口宽度：若按视口算，
+          "滚动条出现→视口变窄→列数减一→内容变矮→滚动条消失"会形成
+          振荡死循环，表现为页面疯狂闪烁；
+        - 滚动条宽度不能用 verticalScrollBar().width()：滚动条从未显示时
+          仍是默认构造尺寸（宽约 100px），会把可用宽度虚扣一大截，
+          导致刚启动进入歌单页时卡片整体小一圈。此处直接用样式表固定值。"""
+        grid = self._playlist_cards_grid
+        margins = grid.contentsMargins()
+        avail = (self._playlist_cards_scroll.width()
+                 - 8  # 竖滚动条样式宽度（见 _build_playlist_cards_widget 的 QSS）
+                 - margins.left() - margins.right())
+        spacing = grid.spacing()
+        base = int(150 * self.scale)
+        min_s = int(110 * self.scale)
+        cols = max(4, avail // (base + spacing))
+        s = max(min_s, min(base, (avail - (cols - 1) * spacing) // cols))
+        return cols, s
+
     def _relayout_playlist_cards(self):
-        """按固定四列排布歌单卡片，严格从左到右填充，不居中、不跳位。
+        """按宽度自适应列数排布歌单卡片，严格从左到右填充，不居中、不跳位。
 
         第 0 位（左上角）= 新建歌单卡片（固定）。
-        第 1～4 位 = 第一行曲库卡片，第 5～8 位 = 第二行，以此类推。
+        第一行排满后进入第二行，以此类推。
         多余空间全部由右侧隐身占位列吸收，保持左对齐。
         """
         names = self._sorted_playlist_names()
         self._playlist_card_map = {}
-        cols = 4
+        cols, card_sz = self._playlist_layout_metrics()
+        self._playlist_layout = (cols, card_sz)
+        self._playlist_card_sz = card_sz  # 供 _playlist_card_size 取当前尺寸
         total_cells = 1 + len(names)     # 新建卡片 + 所有歌单卡片
         rows = (total_cells + cols - 1) // cols
-        # 清空网格
+        # 清空网格。deleteLater 是延迟删除，必须先 hide() 立即从视觉上移除，
+        # 否则窗口缩放触发重排时新旧两组卡片会同屏
         while self._playlist_cards_grid.count():
             item = self._playlist_cards_grid.takeAt(0)
             w = item.widget()
             if w is not None:
+                w.hide()
                 w.deleteLater()
         # 新建歌单卡片 —— 永远在第 0 位（row=0, col=0）
         self._playlist_cards_grid.addWidget(self._make_new_playlist_card(), 0, 0)
@@ -3848,8 +3894,13 @@ class MusicPlayer(QMainWindow):
         self._card_scroll_anim = anim
 
     def _playlist_card_size(self):
-        """歌单卡片封面尺寸（圆角正方形，宽 = 高）。"""
-        s = int(150 * self.scale)
+        """歌单卡片封面尺寸（圆角正方形，宽 = 高）。
+
+        布局时会按窗口宽度压缩（见 _playlist_layout_metrics），
+        未布局前回退原始尺寸。"""
+        s = getattr(self, '_playlist_card_sz', None)
+        if s is None:
+            s = int(150 * self.scale)
         return s, s
 
     def _make_new_playlist_card(self):
@@ -4386,7 +4437,7 @@ class MusicPlayer(QMainWindow):
         self._toplist_cards_grid = QGridLayout(self._toplist_cards_widget)
         self._toplist_cards_grid.setContentsMargins(20, 20, 20, 20)
         self._toplist_cards_grid.setSpacing(18)  # 卡片间距
-        self._toplist_cards_cols = 4  # 固定四列
+        self._toplist_cards_cols = 0  # 0=尚未布局，首次进入按容器宽度计算列数
 
     def _clear_toplist_cards(self):
         """移除当前所有排行榜卡片。"""
@@ -4394,14 +4445,22 @@ class MusicPlayer(QMainWindow):
             item = self._toplist_cards_grid.takeAt(0)
             w = item.widget()
             if w is not None:
+                # deleteLater 是延迟删除，事件循环处理前旧卡片仍挂在容器上可见，
+                # 必须先 hide() 立即从视觉上移除，避免窗口缩放时新旧两组卡片同屏
+                w.hide()
                 w.deleteLater()
         self._toplist_cards_grid.setRowStretch(0, 0)
 
     def _relayout_toplist_cards(self):
-        """按固定四列排布卡片（卡片组整体水平垂直居中）。"""
+        """按 4×3 固定棋盘排布卡片；卡片随窗口拉伸填满网格，
+        最大化时不留大片四周空白。"""
         if not TOPLIST_IDS:
             return
-        cols = 4
+        cols = 4  # 固定 4 列（榜单共 12 个，恰为 4×3），最大化也保持该布局
+        # 列数固定，仅在首次进入（_browse_toplist 置 0 强制重建）时执行；
+        # 窗口缩放由网格 stretch 自动分配，无需重建卡片
+        if self._toplist_cards_cols == cols:
+            return
         self._toplist_cards_cols = cols
         # 清空网格并重新添加卡片
         self._clear_toplist_cards()
@@ -4409,18 +4468,27 @@ class MusicPlayer(QMainWindow):
         rows = (len(names) - 1) // cols + 1
         for i, name in enumerate(names):
             btn = self._make_toplist_card(name)
-            # 整体居中：卡片放在第 1 行/列起，四周用弹性空白行/列撑开
-            self._toplist_cards_grid.addWidget(btn, i // cols + 1, i % cols + 1)
-        # 四周弹性空白，实现整体居中
-        for c in range(cols + 2):
+            self._toplist_cards_grid.addWidget(btn, i // cols, i % cols)
+        # 全部行列等分拉伸，卡片铺满容器
+        for c in range(cols):
             self._toplist_cards_grid.setColumnStretch(c, 1)
-        for r in range(rows + 2):
+        for r in range(rows):
             self._toplist_cards_grid.setRowStretch(r, 1)
+        self._adjust_toplist_spacing()
 
-    def _toplist_card_size(self):
-        """排行榜卡片尺寸（圆角正方形，宽 = 高）。"""
-        s = int(150 * self.scale)
-        return s, s
+    def _adjust_toplist_spacing(self):
+        """按容器宽度动态调整棋盘边距与卡片间距。
+
+        窗口越大边距/间距越大（有上限），最大化时棋盘既能铺开
+        又不至于挤满整个页面；尺寸未变化时不触发布局刷新。"""
+        w = self._toplist_cards_widget.width()
+        margin = int(min(72 * self.scale, 20 * self.scale + w * 0.02))
+        spacing = int(min(36 * self.scale, 18 * self.scale + w * 0.01))
+        g = self._toplist_cards_grid
+        if g.contentsMargins().left() == margin and g.spacing() == spacing:
+            return
+        g.setContentsMargins(margin, margin, margin, margin)
+        g.setSpacing(spacing)
 
     @staticmethod
     def _wrap_card_name(name):
@@ -4438,7 +4506,6 @@ class MusicPlayer(QMainWindow):
 
     def _make_toplist_card(self, name):
         """创建一个排行榜卡片按钮（圆角矩形 + 渐变背景 + 白字居中）。"""
-        card_w, card_h = self._toplist_card_size()
         idx = list(TOPLIST_IDS.keys()).index(name)
         c1, c2 = self._TOPLIST_CARD_GRADIENTS[idx % len(self._TOPLIST_CARD_GRADIENTS)]
         # hover 时轻微提亮
@@ -4447,7 +4514,9 @@ class MusicPlayer(QMainWindow):
         radius = int(10 * self.scale)
         card = QPushButton(self._wrap_card_name(name), self._toplist_cards_widget)
         card.setCursor(Qt.PointingHandCursor)
-        card.setFixedSize(card_w, card_h)
+        # 不固定尺寸：跟随网格单元拉伸，最大化时棋盘铺满页面不留四周空白
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        card.setMinimumHeight(int(110 * self.scale))
         card.setFocusPolicy(Qt.NoFocus)
         card.setStyleSheet(f"""
             QPushButton {{
@@ -6357,6 +6426,64 @@ class MusicPlayer(QMainWindow):
             self.move(event.globalPos() - self._drag_pos)
             event.accept()
 
+    def _titlebar_mouse_dblclick(self, event):
+        # 双击标题栏：最大化 / 还原（无边框窗口无原生标题栏，需手动实现）
+        if event.button() == Qt.LeftButton:
+            self._toggle_maximize()
+            event.accept()
+
+    def _toggle_maximize(self):
+        # 最大化按钮与标题栏双击共用的切换逻辑
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+
+    def _render_titlebar_icon(self, svg_name, flip=False):
+        """渲染标题栏窗口按钮 SVG 图标（resources/icons/square*.svg）。
+
+        统一着色为标题栏前景色 #1A1A1A；flip=True 时水平镜像（还原态
+        square2 图标按设计要求左右翻转）。按 DPR 放大物理分辨率，高分屏清晰。"""
+        path = os.path.join(self.icons_folder, svg_name)
+        if not os.path.exists(path):
+            return QIcon()
+        try:
+            import re
+            from PyQt5.QtSvg import QSvgRenderer
+            with open(path, 'r', encoding='utf-8') as f:
+                svg_text = re.sub(r'fill:\s*#[0-9a-fA-F]{3,8}',
+                                  'fill:#1A1A1A', f.read())
+            sz = int(14 * self.scale)
+            dpr = self.devicePixelRatio() or 1.0
+            pm = QPixmap(max(1, int(round(sz * dpr))),
+                         max(1, int(round(sz * dpr))))
+            pm.setDevicePixelRatio(dpr)
+            pm.fill(Qt.transparent)
+            p = QPainter(pm)
+            try:
+                p.setRenderHint(QPainter.Antialiasing)
+                p.setRenderHint(QPainter.SmoothPixmapTransform)
+                renderer = QSvgRenderer(svg_text.encode('utf-8'))
+                if renderer.isValid():
+                    renderer.render(p, QRectF(0, 0, sz, sz))
+            finally:
+                p.end()
+            if flip:
+                pm = pm.transformed(QTransform().scale(-1.0, 1.0))
+                pm.setDevicePixelRatio(dpr)
+            return QIcon(pm)
+        except Exception:
+            return QIcon()
+
+    def _sync_max_btn_icon(self):
+        # 普通状态显示 square（最大化），最大化状态显示左右翻转的 square2（还原）
+        if hasattr(self, '_btn_max'):
+            if self.isMaximized():
+                self._btn_max.setIcon(
+                    self._render_titlebar_icon("square2.svg", flip=True))
+            else:
+                self._btn_max.setIcon(self._render_titlebar_icon("square.svg"))
+
     # ---------- 事件过滤 ----------
     def eventFilter(self, obj, event):
         # 初始化尚未完成时跳过所有事件（部分控件此时可能还未创建）
@@ -6368,10 +6495,18 @@ class MusicPlayer(QMainWindow):
         if event.type() == QEvent.ToolTip:
             return True
 
-        # 排行榜卡片容器尺寸变化 → 自动适配列数
+        # 排行榜卡片容器尺寸变化 → 动态调整棋盘边距/间距（列数固定无需重建）
         if obj is getattr(self, '_toplist_cards_widget', None) \
                 and event.type() == QEvent.Resize:
-            self._relayout_toplist_cards()
+            self._adjust_toplist_spacing()
+
+        # 歌单卡片滚动区宽度变化 → 布局(列数/卡片尺寸)变化时才重排。
+        # 监听滚动区自身（其宽度只随窗口变化，与滚动条显隐解耦，不会振荡）
+        _pl_scroll = getattr(self, '_playlist_cards_scroll', None)
+        if _pl_scroll is not None and obj is _pl_scroll \
+                and event.type() == QEvent.Resize:
+            if self._playlist_layout_metrics() != self._playlist_layout:
+                self._relayout_playlist_cards()
 
         # 右侧面板尺寸变化 → 同步猜你喜欢失败提示层位置
         if obj is getattr(self, 'right_panel', None) \
@@ -6551,6 +6686,7 @@ class MusicPlayer(QMainWindow):
 
     def changeEvent(self, event):
         if event.type() == QEvent.WindowStateChange:
+            self._sync_max_btn_icon()  # 最大化/还原图标随窗口状态切换
             old = event.oldState()
             if (old & Qt.WindowMinimized) and not (self.windowState() & Qt.WindowMinimized):
                 saved = getattr(self, '_saved_geometry', None)
@@ -6571,6 +6707,35 @@ class MusicPlayer(QMainWindow):
                 elif msg.wParam == 0xF120:  # SC_RESTORE
                     self._hwnd_restore()
                     return True, 0
+            elif msg.message == 0x0084:  # WM_NCHITTEST
+                # 无边框窗口默认无缩放边缘：鼠标位于窗口边缘热区时返回原生命中值，
+                # 由 Windows 原生处理拖拽缩放（平滑且支持 Aero 贴边分屏）。
+                # 注意：QLayout 布局本身支持拉伸，这里只需解锁窗口缩放能力。
+                if not self.isMaximized() and not self.isFullScreen():
+                    x = ctypes.c_short(msg.lParam & 0xFFFF).value
+                    y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+                    g = self.geometry()  # 无边框窗口 geometry 即原生窗口矩形
+                    m = self._resize_margin
+                    on_l = x - g.left() < m
+                    on_r = g.right() - x < m
+                    on_t = y - g.top() < m
+                    on_b = g.bottom() - y < m
+                    if on_t and on_l:
+                        return True, 13  # HTTOPLEFT
+                    if on_t and on_r:
+                        return True, 14  # HTTOPRIGHT
+                    if on_b and on_l:
+                        return True, 16  # HTBOTTOMLEFT
+                    if on_b and on_r:
+                        return True, 17  # HTBOTTOMRIGHT
+                    if on_l:
+                        return True, 10  # HTLEFT
+                    if on_r:
+                        return True, 11  # HTRIGHT
+                    if on_t:
+                        return True, 12  # HTTOP
+                    if on_b:
+                        return True, 15  # HTBOTTOM
         except:
             pass
         return super().nativeEvent(eventType, message)
