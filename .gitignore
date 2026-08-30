@@ -26,5 +26,5 @@ env/
 .DS_Store
 Thumbs.db
 
-功能.txt
+*.doc
 AGENTS.md
