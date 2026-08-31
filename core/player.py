@@ -13,6 +13,8 @@ from datetime import datetime
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
+# 通配导入在类型检查下不包含 pyqtProperty（PyQt5 存根缺失），显式导入
+from PyQt5.QtCore import pyqtProperty
 
 from core.utils import (
     app_data_dir,
@@ -239,7 +241,11 @@ class MusicPlayer(QMainWindow):
                 background: #AAAAAA;
             }}
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0;
+                height: 0; background: none;
+            }}
+            /* 页面区（滑块两侧）必须显式置空，否则 QSS 渲染下显示为棋盘格纹理 */
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;
             }}
             QScrollBar:horizontal {{
                 height: 6px; margin: 0; border: none; background: transparent;
@@ -251,7 +257,10 @@ class MusicPlayer(QMainWindow):
                 background: #AAAAAA;
             }}
             QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
-                width: 0;
+                width: 0; background: none;
+            }}
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+                background: none;
             }}
         """)
         self.setCentralWidget(central_widget)
@@ -3825,19 +3834,10 @@ class MusicPlayer(QMainWindow):
         self._playlist_cards_scroll.setWidgetResizable(True)
         self._playlist_cards_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._playlist_cards_scroll.setWidget(self._playlist_cards_widget)
+        # 滚动条不再单独定义样式，统一继承中央全局的 6px 细条样式
+        # （含箭头/页面区清零与深色映射，避免各页宽度、配色不一致）
         self._playlist_cards_scroll.setStyleSheet(
-            "QScrollArea { background: transparent; border: none; }"
-            "QScrollBar:vertical { background: #F5F5F7; width: 8px;"
-            "border-radius: 4px; }"
-            "QScrollBar::handle:vertical { background: #C8C8CC;"
-            "border-radius: 4px; }"
-            "QScrollBar::handle:vertical:hover { background: #A8A8AE; }"
-            # 必须显式清零箭头与页面区，否则 QSS 渲染下这些区域
-            # 会显示为棋盘格抖动纹理（深色模式下尤其明显）
-            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical"
-            " { height: 0; background: none; }"
-            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical"
-            " { background: none; }")
+            "QScrollArea { background: transparent; border: none; }")
         # 卡片页头部：右上角排序按钮（样式同歌曲排序按钮）
         self._playlist_header = QWidget()
         hl = QHBoxLayout(self._playlist_header)
