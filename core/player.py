@@ -19,7 +19,6 @@ from core.utils import (
     config_dir,
     mascot_dir,
     resource_path,
-    icon_path,
     image_path,
     reg_theme,
     _theme_color,
@@ -493,36 +492,48 @@ class MusicPlayer(QMainWindow):
 
         self.song_table.verticalHeader().setDefaultAlignment(Qt.AlignCenter)
         font_size_table = int(14 * self.scale)
-        self.song_table.setStyleSheet(f"""
+        # 表格样式：纯静态中性配色，不随主题换色，无需 reg_theme 登记
+        table_css = f"""
             QTableWidget {{
-                background-color: #F5F5F7;
+                background-color: #FBFBFD;
                 border: none;
-                gridline-color: #E5E5E5;
+                gridline-color: transparent;
                 font-size: {font_size_table}px;
                 color: #1A1A1A;
                 outline: none;
+                selection-background-color: #E9E9EF;
+                selection-color: #1A1A1A;
             }}
             QTableWidget::item {{
                 padding: {int(8*self.scale)}px;
                 border: none;
                 outline: none;
-            }}
-            QTableWidget::item:focus {{
-                outline: none;
+                border-bottom: 1px solid #F0F0F3;
             }}
             QTableWidget::item:hover {{
-                background-color: #E8E8EC;
+                background-color: #F1F1F5;
+            }}
+            QTableWidget::item:selected {{
+                background-color: #E9E9EF;
+            }}
+            QHeaderView {{
+                background-color: transparent;
+                border: none;
             }}
             QHeaderView::section {{
-                background-color: #F0F0F2;
-                padding: {int(10*self.scale)}px;
+                background-color: transparent;
+                padding: {int(8*self.scale)}px;
                 border: none;
-                border-bottom: 1px solid #DCDCDC;
+                border-bottom: 1px solid #E4E4EA;
                 font-weight: bold;
-                color: #4A4A4A;
+                color: #55555E;
                 font-size: {int(13*self.scale)}px;
             }}
-        """)
+        """
+        self.song_table.setStyleSheet(table_css)
+        # 时长列表头与内容一致居中，其余表头默认左对齐与内容一致
+        self.song_table.horizontalHeaderItem(4).setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        self.song_table.setShowGrid(False)
         self.song_table.setFocusPolicy(Qt.NoFocus)
         # 表格图标尺寸与收藏图标渲染尺寸一致，避免 1 倍图被二次缩放变模糊
         self.song_table.setIconSize(QSize(int(16 * self.scale), int(16 * self.scale)))
@@ -1377,7 +1388,7 @@ class MusicPlayer(QMainWindow):
         for col in [1, 2, 3, 4]:
             item = self.song_table.item(row, col)
             if item:
-                item.setTextAlignment((Qt.AlignLeft | Qt.AlignVCenter) if col == 1 else (Qt.AlignCenter | Qt.AlignVCenter))
+                item.setTextAlignment((Qt.AlignLeft | Qt.AlignVCenter) if col in (1, 2, 3) else (Qt.AlignCenter | Qt.AlignVCenter))
 
     def load_local_folder(self):
         menu_text = "📁 本地下载"
@@ -6508,16 +6519,18 @@ class MusicPlayer(QMainWindow):
             if self._playlist_layout_metrics() != self._playlist_layout:
                 self._relayout_playlist_cards()
 
-        # 右侧面板尺寸变化 → 同步猜你喜欢失败提示层位置
+        # 右侧面板尺寸变化 → 同步可见覆盖层位置（加载遮罩/猜你喜欢失败提示层）
         if obj is getattr(self, 'right_panel', None) \
                 and event.type() == QEvent.Resize:
-            overlay = getattr(self, '_recommend_error_overlay', None)
-            if overlay is not None:
+            for overlay in (getattr(self, 'loading_overlay', None),
+                            getattr(self, '_recommend_error_overlay', None)):
+                if overlay is None:
+                    continue
                 try:
                     if overlay.isVisible():
                         overlay.setGeometry(self.right_panel.rect())
                 except RuntimeError:
-                    pass
+                    pass  # 覆盖层已被销毁
 
         # 表格 viewport：鼠标移动检测单元格 → 启动/重置 tooltip 定时器
         if obj == self.song_table.viewport():
