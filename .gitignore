@@ -20,6 +20,11 @@ venv/
 .venv/
 env/
 
+# 运行日志与调试截图
+debug.log
+*.log
+_scroll_color.png
+
 # 编辑器 / 系统
 .idea/
 .vscode/
