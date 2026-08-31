@@ -7,7 +7,8 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 
-from core.utils import _theme_color, _theme_rgb, resource_path, icon_path
+from core.utils import (_theme_color, _theme_rgb, resource_path, icon_path,
+                        dark_paint_hex)
 
 # 开启高分屏自适应（需在 QApplication 创建之前设置，全局生效）
 QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
@@ -155,8 +156,8 @@ class LoadingOverlay(QWidget):
             # 遮罩模式：白色系（深色遮罩上清晰可见）
             track_c, text_c = QColor(255, 255, 255, 50), QColor("#FFFFFF")
         else:
-            # 无遮罩模式：深色系（浅色页面上清晰可见）
-            track_c, text_c = QColor(0, 0, 0, 40), QColor("#666666")
+            # 无遮罩模式：深色系（浅色/深色页面上经映射保持可见）
+            track_c, text_c = QColor(0, 0, 0, 40), QColor(dark_paint_hex("#666666"))
         # 固定轨迹圆（浅色）
         p.setPen(QPen(track_c, 3, Qt.SolidLine, Qt.RoundCap))
         p.drawArc(cx - ring_r, cy - ring_r - 10, ring_r * 2, ring_r * 2, 0, 360 * 16)
@@ -214,8 +215,9 @@ class SplashScreen(QWidget):
         parent.installEventFilter(self)
 
     def _load_image(self):
-        """读取图片并预缩放：高度完整对齐内容区（上端下端不裁剪），
-        宽度方向铺满、超出左右居中裁剪；避免每帧缩放造成锯齿。"""
+        """读取图片并预缩放：Cover 铺满内容区——取宽高比中较大的缩放系数，
+        两个方向都塞满后居中裁掉超出部分（比例不变形）；
+        避免每帧缩放造成锯齿。"""
         try:
             pix = QPixmap(self._image_path)
             if pix.isNull():
@@ -227,29 +229,20 @@ class SplashScreen(QWidget):
             # 物理分辨率 = 逻辑尺寸 × DPR
             phys_w = max(1, int(parent_w * dpr))
             phys_h = max(1, int(parent_h * dpr))
-            # 以高度为基准等比缩放：上下完整显示，不裁剪
-            ratio = phys_h / pix.height()
+            # Cover：取较大的缩放系数，保证两个方向都铺满
+            ratio = max(phys_w / pix.width(), phys_h / pix.height())
             target_w = max(1, int(pix.width() * ratio))
-            target_h = phys_h
+            target_h = max(1, int(pix.height() * ratio))
             scaled = pix.scaled(
                 target_w, target_h,
                 Qt.KeepAspectRatio,
                 Qt.SmoothTransformation)
-            if scaled.width() >= phys_w:
-                # 宽度超出：左右居中裁剪，上下不裁
-                x = (scaled.width() - phys_w) // 2
-                scaled = scaled.copy(x, 0, phys_w, phys_h)
-            else:
-                # 宽度不足：白底画布水平居中贴图，上下完整
-                canvas = QPixmap(phys_w, phys_h)
-                canvas.fill(QColor("#FFFFFF"))
-                cp = QPainter(canvas)
-                cp.setRenderHint(QPainter.SmoothPixmapTransform, True)
-                cp.setRenderHint(QPainter.Antialiasing, True)
-                cx = (phys_w - scaled.width()) // 2
-                cp.drawPixmap(cx, 0, scaled)
-                cp.end()
-                scaled = canvas
+            # 居中裁剪到目标物理尺寸（缩放系数取 max 后不会小于目标）
+            x = max(0, (scaled.width() - phys_w) // 2)
+            y = max(0, (scaled.height() - phys_h) // 2)
+            scaled = scaled.copy(x, y,
+                                 min(scaled.width(), phys_w),
+                                 min(scaled.height(), phys_h))
             scaled.setDevicePixelRatio(dpr)
             self._pixmap = scaled
         except Exception as e:
@@ -271,7 +264,7 @@ class SplashScreen(QWidget):
             p.drawPixmap(self.rect(), self._pixmap)
         else:
             # 图片缺失时给个底色，不崩溃
-            p.fillRect(self.rect(), QColor("#FFFFFF"))
+            p.fillRect(self.rect(), QColor(dark_paint_hex("#FFFFFF")))
         p.end()
 
     def _fade_and_close(self):
@@ -354,11 +347,11 @@ class MediaButton(QPushButton):
             path = QPainterPath()
             path.addRoundedRect(QRectF(self.rect()), 20, 20)
             p.setClipPath(path)
-            p.fillRect(self.rect(), QColor("#F0F0F2"))
+            p.fillRect(self.rect(), QColor(dark_paint_hex("#F0F0F2")))
             # 轨迹圆
             cx, cy = self.width() // 2, self.height() // 2
             r = min(cx, cy) - 6
-            p.setPen(QPen(QColor("#DCDCDC"), 2, Qt.SolidLine, Qt.RoundCap))
+            p.setPen(QPen(QColor(dark_paint_hex("#DCDCDC")), 2, Qt.SolidLine, Qt.RoundCap))
             p.drawArc(cx - r, cy - r, r * 2, r * 2, 0, 360 * 16)
             # 旋转红色弧
             p.setPen(QPen(QColor(_theme_color()), 3, Qt.SolidLine, Qt.RoundCap))
@@ -369,7 +362,7 @@ class MediaButton(QPushButton):
             p = QPainter(self)
             p.setRenderHint(QPainter.Antialiasing)
             # hover 图标颜色跟随全局主题色（切换主题后自动生效）
-            color = _theme_color() if self._hovered else "#666666"
+            color = _theme_color() if self._hovered else dark_paint_hex("#666666")
             svg_name = self._icon_svg_name()
             if svg_name:
                 pm = self._load_svg_pixmap(svg_name, color)
@@ -574,10 +567,10 @@ class TablePlayButton(QPushButton):
         p.setRenderHint(QPainter.Antialiasing)
         # 按下 / hover 圆形背景（居中，完整圆形）
         if self.isDown():
-            p.setBrush(QColor("#CCCCCC"))
+            p.setBrush(QColor(dark_paint_hex("#CCCCCC")))
             p.setPen(Qt.NoPen)
         elif self._hovered:
-            p.setBrush(QColor("#E0E0E0"))
+            p.setBrush(QColor(dark_paint_hex("#E0E0E0")))
             p.setPen(Qt.NoPen)
         if self.isDown() or self._hovered:
             d = min(self.width(), self.height())
@@ -631,7 +624,7 @@ class BackArrow(QPushButton):
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        c = QColor(_theme_color()) if self._hovered else QColor("#BBBBBB")
+        c = QColor(_theme_color()) if self._hovered else QColor(dark_paint_hex("#BBBBBB"))
         p.setPen(QPen(c, 1.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
         cx, cy = 7, 9
         p.drawLine(cx - 5, cy - 3, cx, cy + 3)
@@ -1058,6 +1051,6 @@ class ColorSwatch(QPushButton):
         p.drawEllipse(QPointF(cx, cy), r, r)
         if self._hovered and not self._selected:
             p.setBrush(Qt.NoBrush)
-            p.setPen(QPen(QColor("#999999"), max(1, 1.5 * self._scale)))
+            p.setPen(QPen(QColor(dark_paint_hex("#999999")), max(1, 1.5 * self._scale)))
             p.drawEllipse(QPointF(cx, cy), r, r)
         p.end()

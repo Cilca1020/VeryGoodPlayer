@@ -71,6 +71,120 @@ def reg_theme(widget, css_template):
     except Exception:
         pass
 
+
+# ---------- 深色模式（纯字符串映射，不依赖 Qt；由 player.py 在运行时切换） ----------
+_DARK = {"on": False}
+
+def is_dark():
+    """当前是否处于深色模式"""
+    return _DARK["on"]
+
+def set_dark_mode(on):
+    """设置深色模式开关（只改状态；样式重刷由调用方负责）"""
+    _DARK["on"] = bool(on)
+
+# 浅色背景 → 深色背景。已深色的底（#1A1A1A / #2A2A2A 等）刻意不映射，
+# 这些是左侧菜单/播放列表面板的"常暗"设计，深浅模式下保持一致。
+_DARK_BG = {
+    "#FFFFFF": "#2B2B31",
+    "#FBFBFD": "#202025",
+    "#FAFAFC": "#202025",
+    "#F8F8F8": "#27272D",
+    "#F5F5F7": "#26262C",
+    "#F1F1F5": "#34343C",
+    "#F0F0F0": "#2E2E35",
+    "#F0F0F2": "#2E2E35",
+    "#EDEDF2": "#34343C",
+    "#EEEEEE": "#2E2E35",
+    "#EAEAEF": "#34343C",
+    "#E9E9EF": "#3C3C45",
+    "#E8E8EC": "#38383F",
+    "#E5E5E5": "#3A3A42",
+    "#E5E5EA": "#3A3A42",
+    "#E0E0E0": "#3A3A42",
+    "#EBEBEB": "#3A3A42",
+    "#DCDCDC": "#3F3F47",
+    # 滚动条把手：常态中灰、hover 提亮一档（深色下反向：略亮于深底）
+    "#AAAAAA": "#5A5A63",
+    "#C8C8CC": "#4A4A52",
+    "#A8A8AE": "#5A5A63",
+}
+
+# 深色文字 → 浅色文字（背景变深后文字需要提亮才能保持对比度）
+_DARK_FG = {
+    "#1A1A1A": "#E6E6EA",
+    "#333333": "#CFCFD6",
+    "#4A4A4A": "#B8B8C0",
+    "#55555E": "#A8A8B2",
+    "#666666": "#A6A6B0",
+    "#8A8A93": "#8E8E98",
+    "#888888": "#90909A",
+    "#999999": "#9A9AA4",
+    "#AAAAAA": "#75757F",
+    "#BBBBBB": "#70707A",
+    "#25314C": "#B9C0D0",  # search.svg 图标原色（深藏青），深色下提亮
+}
+
+# 浅色分隔线/边框 → 暗灰（介于深底之上、文字之下）
+_DARK_BORDER = {
+    "#F0F0F3": "#32323A",
+    "#E4E4EA": "#3D3D45",
+    "#E5E5EA": "#3D3D45",
+    "#DCDCDC": "#3D3D45",
+    "#E0E0E0": "#3A3A42",
+    "#E5E5E5": "#3A3A42",
+    "#EBEBEB": "#3A3A42",
+    "#D0D0D0": "#4A4A52",
+    "#CCCCCC": "#4A4A52",
+}
+
+def _hex_repl(mapping):
+    def f(h):
+        key = "#" + h.group(1).upper()
+        return mapping.get(key, h.group(0))
+    return f
+
+def dark_map_css(css):
+    """把浅色 QSS 按声明属性分类映射为深色等价物；未开深色模式时原样返回。
+
+    - 背景/底色属性 → _DARK_BG（含 qlineargradient 里的 stop 色值）；
+    - 文字属性（color / selection-color）→ _DARK_FG，但白色文字保留：
+      主题色按钮、常暗面板上的文字不能被映射成深色；
+    - 边框类属性（border* / gridline-color）→ _DARK_BORDER。
+    只处理 #RRGGBB 六位色值（项目内样式均为六位写法）。"""
+    if not _DARK["on"] or not css:
+        return css
+
+    def repl(m):
+        prop = m.group(1).lower()
+        val = m.group(2)
+        new = val
+        if prop.endswith("background-color") or prop == "background":
+            new = re.sub(r'#([0-9A-Fa-f]{6})\b', _hex_repl(_DARK_BG), val)
+        elif prop == "color" or prop == "selection-color":
+            if "#FFFFFF" not in val.upper():
+                new = re.sub(r'#([0-9A-Fa-f]{6})\b', _hex_repl(_DARK_FG), val)
+        elif prop.startswith("border") or prop == "gridline-color":
+            new = re.sub(r'#([0-9A-Fa-f]{6})\b', _hex_repl(_DARK_BORDER), val)
+        # 无变化时保留原文（含 qlineargradient(x1:0 ...) 等内嵌冒号的值不被破坏）
+        if new == val:
+            return m.group(0)
+        return m.group(0).replace(val, new, 1)
+
+    return re.sub(r'([-\w]+)\s*:\s*([^;{}]+)', repl, css)
+
+def dark_paint_hex(hex_color):
+    """自绘 paint(QColor) 用色随深色模式映射：先查背景表、再文字表、再边框表。
+
+    供 widgets.py 等绕过 QSS 直接 QPainter 绘制的控件使用。"""
+    if not _DARK["on"]:
+        return hex_color
+    key = hex_color.upper()
+    for table in (_DARK_BG, _DARK_FG, _DARK_BORDER):
+        if key in table:
+            return table[key]
+    return hex_color
+
 # ---------- 安全导入 ----------
 try:
     import pygame

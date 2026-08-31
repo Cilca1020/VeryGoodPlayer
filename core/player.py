@@ -24,6 +24,10 @@ from core.utils import (
     _theme_color,
     _set_theme,
     _css_global,
+    dark_map_css,
+    dark_paint_hex,
+    set_dark_mode,
+    is_dark,
     read_embedded_cover,
     _THEME_WIDGETS,
     NeteaseAPI,
@@ -48,6 +52,27 @@ from ui.widgets import (
 )
 from ui.mascot import MascotWindow
 from ui.detail_panel import DetailPanel
+
+
+# ---------- 深色模式：QSS 单点拦截 ----------
+# 全局替换 QWidget.setStyleSheet：把每个控件设置的原始 QSS 存入动态属性
+# `_orig_qss`，再按当前深浅模式做颜色映射后应用。这样无需逐个改造
+# 项目里数百处 setStyleSheet 调用点，切换深色模式时遍历所有控件、
+# 用 `_orig_qss` 重新映射应用即可实现即时切换。
+# reg_theme 的换肤刷新最终也走 setStyleSheet，主题色替换后再做深色映射，
+# 两者互不冲突。
+_ORIG_SET_STYLESHEET = QWidget.setStyleSheet
+
+def _patched_setStyleSheet(self, css):
+    try:
+        self.setProperty("_orig_qss", css)
+        css = dark_map_css(css)
+    except Exception:
+        pass
+    _ORIG_SET_STYLESHEET(self, css)
+
+QWidget.setStyleSheet = _patched_setStyleSheet
+
 
 class MusicPlayer(QMainWindow):
     def __init__(self):
@@ -99,6 +124,7 @@ class MusicPlayer(QMainWindow):
         self.mascot_topmost = True          # 总在最前，默认开启
         self.mascot_controls = True         # 看板娘控制小组件开关，默认开启
         self.theme_color = "#EC4141"         # 主题色（全局），可在设置中更改
+        self.dark_mode = False                # 深色模式（settings.json 持久化）
         self._pending_theme = None           # 设置页待应用的主题色（按“应用”后生效）
         self._themed_widgets = []            # 主题化控件登记表：(widget, css模板)
         self._migrate_legacy_config()        # 旧版根目录配置迁移到 config/ 子目录
@@ -446,9 +472,11 @@ class MusicPlayer(QMainWindow):
             }}
         """)
         # 搜索按钮：单击效果与回车一致（使用 resources/icons/search.svg 放大镜图标）
+        # SVG 原色为深藏青 #25314C，经 dark_paint_hex 映射保证深色下可见
         self.search_btn = QPushButton()
         self.search_btn.setFixedSize(tool_h, tool_h)
-        self.search_btn.setIcon(QIcon(os.path.join(self.icons_folder, "search.svg")))
+        self.search_btn.setIcon(self._render_svg_icon(
+            "search.svg", dark_paint_hex("#25314C"), int(22 * self.scale)))
         self.search_btn.setIconSize(QSize(int(22 * self.scale), int(22 * self.scale)))
         self.search_btn.setCursor(Qt.PointingHandCursor)
         self.search_btn.setToolTip("搜索")
@@ -534,6 +562,9 @@ class MusicPlayer(QMainWindow):
         # 时长列表头与内容一致居中，其余表头默认左对齐与内容一致
         self.song_table.horizontalHeaderItem(4).setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
         self.song_table.setShowGrid(False)
+        # 隐藏行号列：其与列表头的交界格（QTableCornerButton）默认白底无法
+        # 随主题透明，且行号本身无实际作用，整个隐藏最干净
+        self.song_table.verticalHeader().setVisible(False)
         self.song_table.setFocusPolicy(Qt.NoFocus)
         # 表格图标尺寸与收藏图标渲染尺寸一致，避免 1 倍图被二次缩放变模糊
         self.song_table.setIconSize(QSize(int(16 * self.scale), int(16 * self.scale)))
@@ -921,6 +952,12 @@ class MusicPlayer(QMainWindow):
         self._suppress_browse_save = False
         self.was_playing = False  # 用于拖动状态记忆
 
+        # ---------- 深色模式启动应用 ----------
+        # 样式表在构建期已按深色映射（_load_settings 先于 UI 构建开启开关），
+        # 此处只补 QPalette 兜底与标题栏图标配色
+        if self.dark_mode:
+            self._apply_dark_mode(True, save=False)
+
         # ---------- 看板娘 ----------
         self.mascot = None
         self._create_mascot()
@@ -1266,10 +1303,12 @@ class MusicPlayer(QMainWindow):
            通过 song_id / filepath / 名称+歌手 在主表格中查找当前播放歌曲，
            无论其来源是哪个播放列表，只要存在于当前表格中就高亮。"""
         # 步骤 1：重置所有行的样式到默认
+        # 歌曲名前景色不能走 QSS（setForeground 是运行时属性），
+        # 用 dark_paint_hex 映射：浅色模式黑字、深色模式自动变浅
         for r in range(self.song_table.rowCount()):
             item = self.song_table.item(r, 1)
             if item:
-                item.setForeground(QColor("#1A1A1A"))
+                item.setForeground(QColor(dark_paint_hex("#1A1A1A")))
             # 重置播放按钮状态（▶ 默认灰色图标，TablePlayButton 自绘）
             cell_widget = self.song_table.cellWidget(r, 0)
             pb = getattr(cell_widget, '_play_btn', None) or cell_widget
@@ -2422,8 +2461,8 @@ class MusicPlayer(QMainWindow):
             p.setRenderHint(QPainter.Antialiasing)
             w, h = self.width(), self.height()
             r = h / 2.0
-            # 轨道背景：开启=红色，关闭=浅灰
-            track = QColor(_theme_color()) if self._checked else QColor("#E0E0E0")
+            # 轨道背景：开启=红色，关闭=浅灰（深色模式下经映射为暗灰）
+            track = QColor(_theme_color()) if self._checked else QColor(dark_paint_hex("#E0E0E0"))
             p.setPen(Qt.NoPen)
             p.setBrush(track)
             p.drawRoundedRect(QRectF(0, 0, w, h), r, r)
@@ -2482,6 +2521,18 @@ class MusicPlayer(QMainWindow):
         row_splash.addWidget(self._splash_toggle)
         row_splash.addStretch(1)
         vbox.addLayout(row_splash)
+
+        # —— 深色模式开关（仿 iOS 风格，即时切换）——
+        row_dark = QHBoxLayout()
+        row_dark.setSpacing(int(12*self.scale))
+        lab_dark = QLabel("深色模式")
+        lab_dark.setStyleSheet(f"font-size: {int(14*self.scale)}px; color: #1A1A1A;")
+        self._dark_toggle = self.ToggleSwitch(checked=self.dark_mode, scale=self.scale)
+        self._dark_toggle.toggled.connect(self._toggle_dark_setting)
+        row_dark.addWidget(lab_dark)
+        row_dark.addWidget(self._dark_toggle)
+        row_dark.addStretch(1)
+        vbox.addLayout(row_dark)
 
         # —— 主题色（预设色块 + 自定义 hex）——
         sec_theme = QLabel("主题色")
@@ -2638,6 +2689,10 @@ class MusicPlayer(QMainWindow):
         """设置页的开屏画面开关：即时生效（下次启动） + 持久化"""
         self.splash_enabled = bool(checked)
         self._save_settings()
+
+    def _toggle_dark_setting(self, checked):
+        """设置页的深色模式开关：即时切换全局样式并持久化"""
+        self._apply_dark_mode(bool(checked))
 
     # ---------- 主题色设置 ----------
     def _apply_custom_theme(self, color):
@@ -3069,6 +3124,11 @@ class MusicPlayer(QMainWindow):
                 if isinstance(tc, str) and self._is_valid_hex(tc):
                     self.theme_color = tc.lower()
                     _set_theme(self.theme_color)
+                # 深色模式在 UI 构建前开启，构建过程中的样式即按深色映射
+                dm = data.get("dark_mode")
+                if isinstance(dm, bool):
+                    self.dark_mode = dm
+                    set_dark_mode(dm)
         except Exception as e:
             print(f"⚠️ 设置加载失败：{e}")
 
@@ -3097,6 +3157,7 @@ class MusicPlayer(QMainWindow):
                     "mascot_topmost": self.mascot_topmost,
                     "mascot_controls": self.mascot_controls,
                     "theme_color": self.theme_color,
+                    "dark_mode": self.dark_mode,
                 }, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"⚠️ 设置保存失败：{e}")
@@ -3149,7 +3210,8 @@ class MusicPlayer(QMainWindow):
                   getattr(self, "wave_canvas", None),
                   getattr(self, "left_nav", None),
                   getattr(self, "_mascot_toggle", None),
-                  getattr(self, "_splash_toggle", None)):
+                  getattr(self, "_splash_toggle", None),
+                  getattr(self, "_dark_toggle", None)):
             try:
                 if w is not None:
                     w.update()
@@ -3196,6 +3258,81 @@ class MusicPlayer(QMainWindow):
             if getattr(self, "_toplist_back_btn", None) is not None:
                 self._toplist_back_btn.setIcon(
                     self._render_svg_icon("caret-left.svg", self.theme_color, int(18*self.scale)))
+        except Exception:
+            pass
+
+    # ---------- 深色模式（即时切换） ----------
+    def _apply_dark_mode(self, on, save=True):
+        """切换深色/浅色模式并即时刷新全局样式。
+
+        QSS 靠模块级 setStyleSheet 拦截 + _orig_qss 重放实现刷新；
+        未被 QSS 覆盖的控件（弹窗/菜单/提示等）靠 QPalette 兜底；
+        QPainter 自绘图标（标题栏按钮）需单独重渲染。"""
+        self.dark_mode = bool(on)
+        set_dark_mode(self.dark_mode)
+        self._apply_app_palette()
+        self._refresh_all_stylesheets()
+        self._refresh_titlebar_icons()
+        # 表格歌曲名的前景色是运行时属性（非 QSS），切换后需重刷
+        try:
+            if hasattr(self, 'song_table'):
+                self._update_table_playing_indicator()
+        except Exception:
+            pass
+        if save:
+            self._save_settings()
+
+    def _apply_app_palette(self):
+        """设置应用级 QPalette：给未写样式的控件（QMessageBox/QMenu 默认态/
+        QToolTip 等）兜底深浅配色。深色文字/高亮跟随主题色。"""
+        app = QApplication.instance()
+        if app is None:
+            return
+        if not self.dark_mode:
+            app.setPalette(app.style().standardPalette())
+            return
+        r, g, b = self._theme_rgb()
+        pal = QPalette()
+        pal.setColor(QPalette.Window, QColor("#232329"))
+        pal.setColor(QPalette.WindowText, QColor("#E6E6EA"))
+        pal.setColor(QPalette.Base, QColor("#202025"))
+        pal.setColor(QPalette.AlternateBase, QColor("#26262C"))
+        pal.setColor(QPalette.Text, QColor("#E6E6EA"))
+        pal.setColor(QPalette.Button, QColor("#2E2E35"))
+        pal.setColor(QPalette.ButtonText, QColor("#E6E6EA"))
+        pal.setColor(QPalette.ToolTipBase, QColor("#2E2E35"))
+        pal.setColor(QPalette.ToolTipText, QColor("#E6E6EA"))
+        pal.setColor(QPalette.BrightText, QColor("#FFFFFF"))
+        pal.setColor(QPalette.Highlight, QColor(r, g, b))
+        pal.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
+        pal.setColor(QPalette.Disabled, QPalette.Text, QColor("#6C6C76"))
+        pal.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#6C6C76"))
+        pal.setColor(QPalette.Disabled, QPalette.WindowText, QColor("#6C6C76"))
+        pal.setColor(QPalette.PlaceholderText, QColor("#75757F"))
+        app.setPalette(pal)
+
+    def _refresh_all_stylesheets(self):
+        """遍历全部控件，用拦截时保存的原始 QSS 重新做深浅映射后应用。
+
+        必须用原始 QSS（而非当前 styleSheet()，那已是映射后的结果），
+        否则来回切换会叠加映射；使用未拦截的原生 setter 回写，
+        避免重放过程再次覆盖 _orig_qss。"""
+        for w in QApplication.allWidgets():
+            css = w.property("_orig_qss")
+            if css:
+                try:
+                    _ORIG_SET_STYLESHEET(w, dark_map_css(css))
+                except RuntimeError:
+                    pass  # 控件已销毁
+
+    def _refresh_titlebar_icons(self):
+        """深浅切换后重渲染颜色不经 QSS 的自绘图标（需手动重画）。
+        最小化/关闭为文字按钮走 QSS 随全局刷新，无需处理。"""
+        try:
+            self._sync_max_btn_icon()
+            if hasattr(self, 'search_btn'):
+                self.search_btn.setIcon(self._render_svg_icon(
+                    "search.svg", dark_paint_hex("#25314C"), int(22 * self.scale)))
         except Exception:
             pass
 
@@ -3694,7 +3831,13 @@ class MusicPlayer(QMainWindow):
             "border-radius: 4px; }"
             "QScrollBar::handle:vertical { background: #C8C8CC;"
             "border-radius: 4px; }"
-            "QScrollBar::handle:vertical:hover { background: #A8A8AE; }")
+            "QScrollBar::handle:vertical:hover { background: #A8A8AE; }"
+            # 必须显式清零箭头与页面区，否则 QSS 渲染下这些区域
+            # 会显示为棋盘格抖动纹理（深色模式下尤其明显）
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical"
+            " { height: 0; background: none; }"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical"
+            " { background: none; }")
         # 卡片页头部：右上角排序按钮（样式同歌曲排序按钮）
         self._playlist_header = QWidget()
         hl = QHBoxLayout(self._playlist_header)
@@ -5667,7 +5810,7 @@ class MusicPlayer(QMainWindow):
                 text = f"{n}（{count}首）"
                 item = QTableWidgetItem(text)
                 item.setTextAlignment(Qt.AlignCenter)
-                item.setForeground(QColor("#1A1A1A"))
+                item.setForeground(QColor(dark_paint_hex("#1A1A1A")))
                 tbl.setItem(i + 1, 0, item)
             layout.addWidget(tbl)
             row_h = int(40 * self.scale)
@@ -6453,17 +6596,20 @@ class MusicPlayer(QMainWindow):
     def _render_titlebar_icon(self, svg_name, flip=False):
         """渲染标题栏窗口按钮 SVG 图标（resources/icons/square*.svg）。
 
-        统一着色为标题栏前景色 #1A1A1A；flip=True 时水平镜像（还原态
-        square2 图标按设计要求左右翻转）。按 DPR 放大物理分辨率，高分屏清晰。"""
+        统一着色为标题栏前景色：浅色模式 #1A1A1A / 深色模式 #E6E6EA
+        （标题栏底色随 QSS 映射，图标需同步取反色）；flip=True 时水平
+        镜像（还原态 square2 图标按设计要求左右翻转）。按 DPR 放大物理
+        分辨率，高分屏清晰。"""
         path = os.path.join(self.icons_folder, svg_name)
         if not os.path.exists(path):
             return QIcon()
+        fg = "#E6E6EA" if is_dark() else "#1A1A1A"
         try:
             import re
             from PyQt5.QtSvg import QSvgRenderer
             with open(path, 'r', encoding='utf-8') as f:
                 svg_text = re.sub(r'fill:\s*#[0-9a-fA-F]{3,8}',
-                                  'fill:#1A1A1A', f.read())
+                                  f'fill:{fg}', f.read())
             sz = int(14 * self.scale)
             dpr = self.devicePixelRatio() or 1.0
             pm = QPixmap(max(1, int(round(sz * dpr))),
