@@ -194,6 +194,7 @@ class MusicPlayer(QMainWindow):
         self._slider_prev_sec = 0   # 滑块按下时实际播放位置（秒），用于越界回弹
         self.play_mode = 0          # 播放模式：0=列表循环 1=单曲循环 2=随机播放
         self._shuffle_queue = []    # 随机播放剩余索引队列
+        self._panel_reshow_pending = False  # 最大化/还原过渡中待重显播放列表面板
         self._skip_retry_count = 0  # 无版权自动跳过计数器
         self._toplist_viewing_songs = False  # 排行榜是否正在显示歌曲（而非列表）
         self._toplist_loading = False   # 排行榜：歌曲是否正在后台加载（防重复请求）
@@ -843,6 +844,8 @@ class MusicPlayer(QMainWindow):
         pp_layout.addWidget(self._playlist_empty_state)
         self._playlist_panel.hide()
         self._playlist_panel.move(-9999, -9999)  # 确保启动时不闪现
+        # 中央区域尺寸变化时同步播放列表面板（面板打开状态下缩放窗口）
+        self.centralWidget().installEventFilter(self)
         # 面板滑入/滑出动画
         self._panel_anim = QPropertyAnimation(self._playlist_panel, b"pos")
         self._panel_anim.setDuration(200)
@@ -5311,25 +5314,39 @@ class MusicPlayer(QMainWindow):
         else:
             self._show_playlist_panel()
 
-    def _show_playlist_panel(self):
-        """刷新并显示播放列表面板（从右边缘滑入）"""
-        # 先填充列表内容（此时面板尚未显示，滚动会因 viewport 尺寸异常而失效，
-        # 因此这里不滚动，滚动画给显示后的 QTimer.singleShot）
-        self._refresh_playlist_list()
+    def _playlist_panel_target_pos(self):
+        """计算播放列表面板在 centralWidget 内的目标位置（相对坐标）。"""
         cw = self.centralWidget()
         pw = self._playlist_panel.width()
         ph = self._playlist_panel.height()
-        mw = cw.width()
         # 计算目标位置（相对于 centralWidget 坐标）
         btn_center = self.playlist_btn.mapTo(cw, self.playlist_btn.rect().center())
         target_x = btn_center.x() - pw // 2 + int(10 * self.scale)
         target_y = btn_center.y() - ph - int(43 * self.scale)
+        mw = cw.width()
         if target_x < 0:
             target_x = int(10 * self.scale)
         elif target_x + pw > mw:
             target_x = mw - pw - int(10 * self.scale)
         if target_y < 0:
             target_y = btn_center.y() + self.playlist_btn.height() + int(5 * self.scale)
+        return QPoint(target_x, target_y)
+
+    def _show_playlist_panel(self):
+        """刷新并显示播放列表面板（从右边缘滑入）"""
+        # 先填充列表内容（此时面板尚未显示，滚动会因 viewport 尺寸异常而失效，
+        # 因此这里不滚动，滚动画给显示后的 QTimer.singleShot）
+        self._refresh_playlist_list()
+        cw = self.centralWidget()
+        # 高度随中央区域自适应：小窗口保底 400*scale，最大化时按中央区
+        # 高度 62% 放大（上限 640*scale，避免超宽屏下面板高得突兀）
+        ph = min(max(int(cw.height() * 0.62), int(400 * self.scale)),
+                 int(640 * self.scale))
+        self._playlist_panel.setFixedHeight(ph)
+        pw = self._playlist_panel.width()
+        mw = cw.width()
+        target = self._playlist_panel_target_pos()
+        target_x, target_y = target.x(), target.y()
         # 从右边缘外滑入
         start_x = mw
         self._playlist_panel.move(start_x, target_y)
@@ -5370,6 +5387,22 @@ class MusicPlayer(QMainWindow):
             self._panel_anim.finished.disconnect(self._on_panel_slide_out_done)
         except TypeError:
             pass
+
+    def _reshow_playlist_panel_after_resize(self):
+        """最大化/还原过渡结束后，按新几何重新显示播放列表面板（无滑入动画）"""
+        pp = getattr(self, '_playlist_panel', None)
+        if pp is None or pp.isVisible():
+            return
+        # 过渡期间用户恰好操作了面板（滑入/滑出动画进行中），交给动画处理
+        if self._panel_anim.state() == QAbstractAnimation.Running:
+            return
+        cw = self.centralWidget()
+        ph = min(max(int(cw.height() * 0.62), int(400 * self.scale)),
+                 int(640 * self.scale))
+        pp.setFixedHeight(ph)
+        pp.move(self._playlist_panel_target_pos())
+        pp.show()
+        pp.raise_()
 
     def _refresh_playlist_list(self, scroll_to_playing=False, preserve_scroll=None):
         """刷新列表面板中的歌曲列表（独立 _panel_queue，不受 playlist_data 影响）
@@ -5879,7 +5912,13 @@ class MusicPlayer(QMainWindow):
         lbl = QLabel("歌单名称（20字以内）：")
         lbl.setStyleSheet(f"font-size:{int(14*self.scale)}px; background:transparent; border:none;")
         inp = QLineEdit()
-        inp.setStyleSheet(f"font-size:{int(15*self.scale)}px;padding:4px;")
+        # 带样式的 QLineEdit 会脱离 palette 兜底，必须显式给配色
+        # （色值均在深色映射表内，深色下自动转为深底浅字）
+        inp.setStyleSheet(f"""
+            QLineEdit {{ border: 1px solid #DCDCDC; border-radius: {int(6*self.scale)}px;
+                padding: 4px {int(8*self.scale)}px; font-size: {int(15*self.scale)}px;
+                color: #333333; background: #FFFFFF; }}
+        """)
         inp.setFixedHeight(int(32 * self.scale))
         MAX_NAME_LEN = 20
         inp.textChanged.connect(lambda text: btn_ok.setEnabled(bool(text.strip())))
@@ -6665,6 +6704,28 @@ class MusicPlayer(QMainWindow):
             if self._playlist_layout_metrics() != self._playlist_layout:
                 self._relayout_playlist_cards()
 
+        # 中央区域尺寸变化 → 播放列表面板打开状态下同步高度与位置
+        # （动画进行中跳过，避免与滑入/滑出动画位置打架）
+        if obj is self.centralWidget() and event.type() == QEvent.Resize:
+            pp = getattr(self, '_playlist_panel', None)
+            # 最大化/还原过渡：面板已被 changeEvent 隐藏，此处首次收到
+            # 新几何的 Resize，清除标记并延一拍（等子布局就绪）后
+            # 按新几何重显面板（用 lambda 包装，避免绑定方法被垃圾回收）
+            if getattr(self, '_panel_reshow_pending', False) and pp is not None:
+                self._panel_reshow_pending = False
+                QTimer.singleShot(0, lambda: self._reshow_playlist_panel_after_resize())
+            if pp is not None and pp.isVisible() \
+                    and self._panel_anim.state() != QAbstractAnimation.Running:
+                cw_h = self.centralWidget().height()
+                ph = min(max(int(cw_h * 0.62), int(400 * self.scale)),
+                         int(640 * self.scale))
+                pp.setFixedHeight(ph)
+                pp.move(self._playlist_panel_target_pos())
+                # 强制立即重绘中央区域，清除面板移动前的旧位置残影：
+                # update() 是异步调度，与最大化/还原同帧时 backing store
+                # 的旧面板区域可能不被重绘，屏幕上会留下"小面板残留"
+                self.centralWidget().repaint()
+
         # 右侧面板尺寸变化 → 同步可见覆盖层位置（加载遮罩/猜你喜欢失败提示层）
         if obj is getattr(self, 'right_panel', None) \
                 and event.type() == QEvent.Resize:
@@ -6741,7 +6802,13 @@ class MusicPlayer(QMainWindow):
                     self._open_detail()
                 return True
             # 面板打开时，点击外部 → 关闭面板
-            if self._playlist_panel.isVisible() and obj != self.playlist_btn:
+            # 例外：标题栏窗口控制按钮（最小化/最大化/关闭）不触发收起动画，
+            # 否则点最大化时面板先播 200ms 滑出动画、窗口同时变大，
+            # 动画期间旧位置的小面板会残留在新尺寸画面上
+            if self._playlist_panel.isVisible() and obj != self.playlist_btn \
+                    and obj not in (getattr(self, '_btn_min', None),
+                                    getattr(self, '_btn_max', None),
+                                    getattr(self, '_btn_close', None)):
                 global_pos = event.globalPos()
                 panel_rect = QRect(
                     self._playlist_panel.mapToGlobal(QPoint(0, 0)),
@@ -6853,6 +6920,30 @@ class MusicPlayer(QMainWindow):
                     self.setGeometry(saved)
                 self.activateWindow()
                 self.raise_()
+            # 最大化/还原切换时，若播放列表面板处于打开状态：
+            # 旧实现在 Resize 事件里就地搬移面板 + repaint，但最大化这一帧是
+            # Qt 先把旧 backing store 整体 blit 到新尺寸并呈现，旧位置上的
+            # "小面板"像素会先闪现一帧。这里改为：先立即隐藏面板并强制重绘
+            # （保证新尺寸首帧不含旧面板），再等新几何就位后重新显示。
+            was_max = bool(old & Qt.WindowMaximized)
+            now_max = bool(self.windowState() & Qt.WindowMaximized)
+            if was_max != now_max and not (self.windowState() & Qt.WindowMinimized):
+                pp = getattr(self, '_playlist_panel', None)
+                if pp is not None and pp.isVisible():
+                    # 无论滑出动画是否在播（点击外部可能已触发收起动画），
+                    # 一律立即停掉动画并隐藏面板，确保最大化首帧不含旧面板
+                    self._panel_anim.stop()
+                    pp.hide()
+                    self.centralWidget().repaint()
+                    # 不能在这里直接 singleShot(0) 重显：最大化时
+                    # centralWidget 的 Resize 事件可能晚于 0ms 定时器到达，
+                    # 面板会先以旧的小尺寸/旧位置显示一帧再被搬走，
+                    # 造成"小面板残影"。改为挂起标记，等首次 Resize
+                    # （新几何已就位）后再延一拍重显（见 eventFilter）。
+                    self._panel_reshow_pending = True
+                    # 兜底：极端情况下始终未收到 Resize（几何未变等场景），
+                    # 稍后仍按当前几何重显，避免面板永久消失
+                    QTimer.singleShot(150, lambda: self._reshow_playlist_panel_after_resize())
         super().changeEvent(event)
 
     def nativeEvent(self, eventType, message):
