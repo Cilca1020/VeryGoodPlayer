@@ -43,6 +43,11 @@ class NeteaseAPI:
         if not HAS_NETEASE:
             raise ImportError("NeteaseCloudMusic 未安装")
         self._api = NeteaseCloudMusicApi()
+        # NeteaseCloudMusicApi.js 引用了全局变量 anonymous_token（原 Node 版由
+        # 服务端注入，Python 移植包缺失），不定义则所有走 JS 加密链路的接口
+        # （如 /song/url/v1）报 ReferenceError。此处注入原项目的默认匿名 token。
+        self._api.ctx.eval(
+            'var anonymous_token = "aaa5bb2592398e884be23fabbb966bf4";')
         self.cache_dir = cache_dir
 
     # ---------- 搜索 ----------
