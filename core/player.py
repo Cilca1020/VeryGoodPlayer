@@ -51,6 +51,9 @@ from ui.widgets import (
     TablePlayButton,
     GenericThread,
     ColorSwatch,
+    BgTableWidget,
+    BgScrollArea,
+    BgWidget,
 )
 from ui.mascot import MascotWindow
 from ui.detail_panel import DetailPanel
@@ -127,6 +130,7 @@ class MusicPlayer(QMainWindow):
         self.mascot_controls = True         # 看板娘控制小组件开关，默认开启
         self.theme_color = "#EC4141"         # 主题色（全局），可在设置中更改
         self.dark_mode = False                # 深色模式（settings.json 持久化）
+        self.bg_opacity = 50                  # 内容区背景图不透明度（0-100），首次使用默认 50%
         self._pending_theme = None           # 设置页待应用的主题色（按“应用”后生效）
         self._themed_widgets = []            # 主题化控件登记表：(widget, css模板)
         self._migrate_legacy_config()        # 旧版根目录配置迁移到 config/ 子目录
@@ -508,8 +512,8 @@ class MusicPlayer(QMainWindow):
         # 工具栏初始隐藏，进入具体菜单时再按需显示
         self.toolbar.hide()
 
-        # ---------- 歌曲表格 ----------
-        self.song_table = QTableWidget()
+        # ---------- 歌曲表格（带可选 cover 背景图） ----------
+        self.song_table = BgTableWidget("#FBFBFD")
         self.song_table.setColumnCount(7)
         self.song_table.setHorizontalHeaderLabels(["", "歌曲名", "歌手", "专辑", "时长", "", ""])
 
@@ -531,28 +535,31 @@ class MusicPlayer(QMainWindow):
         self.song_table.verticalHeader().setDefaultAlignment(Qt.AlignCenter)
         font_size_table = int(14 * self.scale)
         # 表格样式：纯静态中性配色，不随主题换色，无需 reg_theme 登记
+        # 背景色 transparent：底色与可选背景图由 BgTableWidget 自绘（深浅模式自适应）
+        # hover/选中/分割线用中性灰半透明（rgba）：在背景图上呈"叠加"而非遮盖，
+        # 且深浅两种模式下分别呈现"压暗/提亮"叠加效果（dark_map_css 不改 rgba 值）
         table_css = f"""
             QTableWidget {{
-                background-color: #FBFBFD;
+                background-color: transparent;
                 border: none;
                 gridline-color: transparent;
                 font-size: {font_size_table}px;
                 color: #1A1A1A;
                 outline: none;
-                selection-background-color: #E9E9EF;
+                selection-background-color: rgba(128, 128, 128, 90);
                 selection-color: #1A1A1A;
             }}
             QTableWidget::item {{
                 padding: {int(8*self.scale)}px;
                 border: none;
                 outline: none;
-                border-bottom: 1px solid #F0F0F3;
+                border-bottom: 1px solid rgba(128, 128, 128, 31);
             }}
             QTableWidget::item:hover {{
-                background-color: #F1F1F5;
+                background-color: rgba(128, 128, 128, 64);
             }}
             QTableWidget::item:selected {{
-                background-color: #E9E9EF;
+                background-color: rgba(128, 128, 128, 90);
             }}
             QHeaderView {{
                 background-color: transparent;
@@ -562,7 +569,7 @@ class MusicPlayer(QMainWindow):
                 background-color: transparent;
                 padding: {int(8*self.scale)}px;
                 border: none;
-                border-bottom: 1px solid #E4E4EA;
+                border-bottom: 1px solid rgba(128, 128, 128, 40);
                 font-weight: bold;
                 color: #55555E;
                 font-size: {int(13*self.scale)}px;
@@ -603,6 +610,7 @@ class MusicPlayer(QMainWindow):
         self._build_settings_panel()
         right_layout.addWidget(self.settings_panel, 1)
         self.settings_panel.hide()
+        self._load_bg_images()   # 启动时应用已转存的内容区背景图
 
         body_layout.addWidget(self.left_menu)
         body_layout.addWidget(self.right_panel, 1)
@@ -2491,7 +2499,8 @@ class MusicPlayer(QMainWindow):
     def _build_settings_panel(self):
         """构建设置主页面（不使用表格）。目前含：看板娘开关、下载地址。"""
         panel = QWidget()
-        panel.setStyleSheet("background-color: #F5F5F7;")
+        # 面板背景透明：底色与可选背景图由外层 BgScrollArea 绘制（固定不随滚动）
+        panel.setStyleSheet("background-color: transparent;")
         vbox = QVBoxLayout(panel)
         vbox.setContentsMargins(int(40*self.scale), int(32*self.scale),
                                 int(40*self.scale), int(32*self.scale))
@@ -2517,8 +2526,19 @@ class MusicPlayer(QMainWindow):
         lab_mascot.setStyleSheet(f"font-size: {int(14*self.scale)}px; color: #1A1A1A;")
         self._mascot_toggle = self.ToggleSwitch(checked=self.mascot_enabled, scale=self.scale)
         self._mascot_toggle.toggled.connect(self._toggle_mascot_setting)
+        # 打开资源目录：跳转 mascot/ 文件夹，便于查看/替换资源包
+        btn_mascot_dir = QPushButton("打开资源目录")
+        btn_mascot_dir.setFixedSize(int(100*self.scale), int(30*self.scale))
+        btn_mascot_dir.setCursor(Qt.PointingHandCursor)
+        btn_mascot_dir.setStyleSheet(
+            f"QPushButton {{ background: #FFFFFF; border: 1px solid #DCDCDC; "
+            f"border-radius: {int(6*self.scale)}px; "
+            f"font-size: {int(14*self.scale)}px; color: #1A1A1A; }}"
+            f"QPushButton:hover {{ background-color: #F0F0F0; }}")
+        btn_mascot_dir.clicked.connect(self._open_mascot_dir)
         row_mascot.addWidget(lab_mascot)
         row_mascot.addWidget(self._mascot_toggle)
+        row_mascot.addWidget(btn_mascot_dir)
         row_mascot.addStretch(1)
         vbox.addLayout(row_mascot)
 
@@ -2545,6 +2565,80 @@ class MusicPlayer(QMainWindow):
         row_dark.addWidget(self._dark_toggle)
         row_dark.addStretch(1)
         vbox.addLayout(row_dark)
+
+        # —— 背景图（表格/排行榜/歌单/设置页共用，cover 等比裁剪 + 透明度可调）——
+        sec_bg = QLabel("背景图")
+        sec_bg.setStyleSheet(
+            f"font-size: {int(15*self.scale)}px; font-weight: 600; "
+            f"color: #666666; margin-top: {int(8*self.scale)}px;")
+        vbox.addWidget(sec_bg)
+
+        btn_bg_style = (
+            f"QPushButton {{ background: #FFFFFF; border: 1px solid #DCDCDC; "
+            f"border-radius: {int(6*self.scale)}px; "
+            f"font-size: {int(14*self.scale)}px; color: #1A1A1A; }}"
+            f"QPushButton:hover {{ background-color: #F0F0F0; }}")
+
+        def _bg_slider(value):
+            """透明度滑杆（0-100%），主题色把手与进度条风格一致"""
+            s = QSlider(Qt.Horizontal)
+            s.setRange(0, 100)
+            s.setValue(value)
+            s.setFixedWidth(int(120 * self.scale))
+            reg_theme(s, f"""
+                QSlider {{ border: none; min-height: {int(4*self.scale)}px; }}
+                QSlider::groove:horizontal {{
+                    border: none; height: {int(4*self.scale)}px;
+                    background: #DCDCDC; border-radius: {int(2*self.scale)}px;
+                }}
+                QSlider::sub-page:horizontal {{
+                    border: none; background: #EC4141;
+                    border-radius: {int(2*self.scale)}px;
+                }}
+                QSlider::handle:horizontal {{
+                    border: none; background: #EC4141;
+                    width: {int(12*self.scale)}px; height: {int(12*self.scale)}px;
+                    margin: -{int(4*self.scale)}px 0;
+                    border-radius: {int(6*self.scale)}px;
+                }}
+            """)
+            return s
+
+        def _bg_row(title, opacity_value):
+            """一行背景图设置：上传 / 恢复默认 / 透明度滑杆"""
+            row = QHBoxLayout()
+            row.setSpacing(int(12 * self.scale))
+            lab = QLabel(title)
+            lab.setStyleSheet(f"font-size: {int(14*self.scale)}px; color: #1A1A1A;")
+            btn_pick = QPushButton("选择图片")
+            btn_pick.setFixedSize(int(80 * self.scale), int(32 * self.scale))
+            btn_pick.setCursor(Qt.PointingHandCursor)
+            btn_pick.setStyleSheet(btn_bg_style)
+            btn_pick.clicked.connect(self._choose_bg_image)
+            btn_reset = QPushButton("恢复默认")
+            btn_reset.setFixedSize(int(80 * self.scale), int(32 * self.scale))
+            btn_reset.setCursor(Qt.PointingHandCursor)
+            btn_reset.setStyleSheet(btn_bg_style)
+            btn_reset.clicked.connect(self._reset_bg_image)
+            lab_op = QLabel("透明度")
+            lab_op.setStyleSheet(f"font-size: {int(14*self.scale)}px; color: #1A1A1A;")
+            slider = _bg_slider(opacity_value)
+            pct = QLabel(f"{opacity_value}%")
+            pct.setFixedWidth(int(38 * self.scale))
+            pct.setStyleSheet(f"font-size: {int(14*self.scale)}px; color: #666666;")
+            slider.valueChanged.connect(
+                lambda v, pl=pct: self._on_bg_opacity_changed(v, pl))
+            row.addWidget(lab)
+            row.addWidget(btn_pick)
+            row.addWidget(btn_reset)
+            row.addStretch(1)
+            row.addWidget(lab_op)
+            row.addWidget(slider)
+            row.addWidget(pct)
+            vbox.addLayout(row)
+
+        # 背景图统一应用于：歌曲表格 / 排行榜卡片页 / 歌单卡片页 / 设置页
+        _bg_row("背景图", self.bg_opacity)
 
         # —— 主题色（预设色块 + 自定义 hex）——
         sec_theme = QLabel("主题色")
@@ -2683,7 +2777,15 @@ class MusicPlayer(QMainWindow):
         vbox.addWidget(tip_cache)
 
         vbox.addStretch(1)
-        self.settings_panel = panel
+        # 内容超出一屏（小窗口/低分辨率）时可纵向滚动：包一层 BgScrollArea，
+        # 样式与歌单卡片页滚动区一致（透明底、隐藏横向、继承全局 6px 细滚动条）；
+        # 底色/可选背景图由 BgScrollArea 绘制（固定不随内容滚动），面板本身透明
+        scroll = BgScrollArea("#F5F5F7")
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(panel)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        self.settings_panel = scroll
         # 打开设置时重置待应用色，高亮当前已生效主题色
         self._pending_theme = None
         self._update_theme_swatches()
@@ -2697,6 +2799,21 @@ class MusicPlayer(QMainWindow):
                 self.mascot.hide()
         self._sync_mascot_enabled(checked)
 
+    def _open_mascot_dir(self):
+        """打开看板娘资源目录（mascot/）：不存在时先创建，再用系统文件管理器打开"""
+        d = mascot_dir()
+        try:
+            os.makedirs(d, exist_ok=True)
+        except Exception as e:
+            print(f"⚠️ 创建看板娘资源目录失败：{e}")
+        if os.name == "nt":
+            try:
+                os.startfile(d)          # Windows：资源管理器打开
+            except Exception as e:
+                print(f"⚠️ 打开资源目录失败：{e}")
+        else:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(d))
+
     def _toggle_splash_setting(self, checked):
         """设置页的开屏画面开关：即时生效（下次启动） + 持久化"""
         self.splash_enabled = bool(checked)
@@ -2705,6 +2822,64 @@ class MusicPlayer(QMainWindow):
     def _toggle_dark_setting(self, checked):
         """设置页的深色模式开关：即时切换全局样式并持久化"""
         self._apply_dark_mode(bool(checked))
+
+    # ---------- 背景图（表格 / 排行榜 / 歌单 / 设置页共用） ----------
+    def _bg_dest_path(self):
+        """背景图转存路径：config/bg.png"""
+        return os.path.join(config_dir(), "bg.png")
+
+    def _bg_widgets(self):
+        """应用背景图的页面容器（同一张图、同一透明度）"""
+        return [self.song_table, self._toplist_cards_widget,
+                self._playlist_page, self.settings_panel]
+
+    def _load_bg_images(self):
+        """启动时加载已转存的背景图并按持久化透明度应用"""
+        dest = self._bg_dest_path()
+        pm = QPixmap(dest) if os.path.exists(dest) else QPixmap()
+        for widget in self._bg_widgets():
+            widget.set_bg_pixmap(pm)
+            widget.set_bg_opacity(self.bg_opacity / 100.0)
+
+    def _choose_bg_image(self):
+        """选择背景图：读取后统一转存 PNG 到 config/（避免原文件被移动后失效）"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择背景图片", "",
+            "图片文件 (*.png *.jpg *.jpeg *.bmp *.webp);;所有文件 (*)")
+        if not path:
+            return
+        pm = QPixmap(path)
+        if pm.isNull():
+            QMessageBox.warning(self, "提示", "无法读取所选图片，请更换文件后重试。")
+            return
+        try:
+            if not pm.save(self._bg_dest_path(), "PNG"):
+                raise IOError("PNG 写入失败")
+        except Exception as e:
+            QMessageBox.warning(self, "提示", f"背景图保存失败：{e}")
+            return
+        for widget in self._bg_widgets():
+            widget.set_bg_pixmap(pm)
+        self._save_settings()
+
+    def _reset_bg_image(self):
+        """移除背景图并删除转存文件"""
+        try:
+            if os.path.exists(self._bg_dest_path()):
+                os.remove(self._bg_dest_path())
+        except Exception as e:
+            print(f"⚠️ 删除背景图失败：{e}")
+        for widget in self._bg_widgets():
+            widget.set_bg_pixmap(QPixmap())
+        self._save_settings()
+
+    def _on_bg_opacity_changed(self, value, pct_label):
+        """透明度滑杆：即时生效并持久化"""
+        self.bg_opacity = int(value)
+        for widget in self._bg_widgets():
+            widget.set_bg_opacity(value / 100.0)
+        pct_label.setText(f"{value}%")
+        self._save_settings()
 
     # ---------- 主题色设置 ----------
     def _apply_custom_theme(self, color):
@@ -3141,6 +3316,14 @@ class MusicPlayer(QMainWindow):
                 if isinstance(dm, bool):
                     self.dark_mode = dm
                     set_dark_mode(dm)
+                so = data.get("bg_opacity")
+                if isinstance(so, int) and 0 <= so <= 100:
+                    self.bg_opacity = so
+                # 兼容早期两份背景图的键（本功能上线初期的配置），迁移为统一透明度
+                if "bg_opacity" not in data:
+                    legacy = data.get("bg_table_opacity", data.get("bg_sidebar_opacity"))
+                    if isinstance(legacy, int) and 0 <= legacy <= 100:
+                        self.bg_opacity = legacy
         except Exception as e:
             print(f"⚠️ 设置加载失败：{e}")
 
@@ -3170,6 +3353,7 @@ class MusicPlayer(QMainWindow):
                     "mascot_controls": self.mascot_controls,
                     "theme_color": self.theme_color,
                     "dark_mode": self.dark_mode,
+                    "bg_opacity": self.bg_opacity,
                 }, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"⚠️ 设置保存失败：{e}")
@@ -3859,8 +4043,9 @@ class MusicPlayer(QMainWindow):
         self._card_sort_btn.setCursor(Qt.PointingHandCursor)
         self._card_sort_btn.clicked.connect(self._pop_card_sort_menu)
         hl.addWidget(self._card_sort_btn, 0)
-        # 页面容器：头部 + 滚动区
-        self._playlist_page = QWidget()
+        # 页面容器：头部 + 滚动区（BgWidget 自绘底色与可选背景图，
+        # 头部无底色、滚动区 transparent，背景图透过两层子控件可见）
+        self._playlist_page = BgWidget("#FBFBFD")
         pl = QVBoxLayout(self._playlist_page)
         pl.setContentsMargins(0, 0, 0, 0)
         pl.setSpacing(0)
@@ -4587,10 +4772,9 @@ class MusicPlayer(QMainWindow):
 
     def _build_toplist_cards_widget(self):
         """排行榜母列表：封面棋盘网格容器（圆角渐变卡片）。"""
-        self._toplist_cards_widget = QWidget()
+        # BgWidget 自绘底色与可选背景图，无需 QSS 背景参与
+        self._toplist_cards_widget = BgWidget("#FBFBFD")
         self._toplist_cards_widget.setObjectName("toplistCards")
-        self._toplist_cards_widget.setStyleSheet(
-            "QWidget#toplistCards { background: transparent; }")
         self._toplist_cards_grid = QGridLayout(self._toplist_cards_widget)
         self._toplist_cards_grid.setContentsMargins(20, 20, 20, 20)
         self._toplist_cards_grid.setSpacing(18)  # 卡片间距

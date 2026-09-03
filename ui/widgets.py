@@ -1054,3 +1054,114 @@ class ColorSwatch(QPushButton):
             p.setPen(QPen(QColor(dark_paint_hex("#999999")), max(1, 1.5 * self._scale)))
             p.drawEllipse(QPointF(cx, cy), r, r)
         p.end()
+
+
+# ---------- 可设置背景图（cover 等比裁剪）的列表 / 表格 ----------
+class _BgImageMixin:
+    """底色 + cover 等比裁剪背景图的绘制混入。
+
+    设计要点：
+    - 使用方式：控件 QSS 背景设为 transparent，paintEvent 中先自绘
+      底色 + 背景图，再调用父类 paintEvent，使条目/文字叠在图片之上；
+    - cover 模式：等比缩放至完全铺满目标区域后居中裁剪，绝不拉伸变形；
+    - 按目标尺寸缓存缩放结果，避免滚动/hover 高频重绘时反复缩放大图；
+    - 底色经 dark_paint_hex 映射，深浅模式下与原 QSS 底色保持一致。
+    """
+
+    def _init_bg_image(self, base_color):
+        self._bg_base = base_color          # 底色（透明度低时露出）
+        self._bg_pixmap = QPixmap()         # 原图（空 = 未设置背景图）
+        self._bg_scaled = None              # cover 裁剪结果缓存
+        self._bg_scaled_size = None         # 缓存对应的目标尺寸
+        self._bg_opacity = 1.0              # 图片不透明度 0.0~1.0
+        # 滚动类控件（有 viewport）：底色/背景图在 viewport 自己的绘制周期
+        # 开头绘制（见 eventFilter）；BgWidget 无 viewport，走自身 paintEvent
+        if hasattr(self, "viewport"):
+            self.viewport().installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        # 注意：底色+背景图必须画在 viewport 自身的 paint 周期内。若在父控件
+        # 的 paintEvent 里画到 viewport 上，离屏 grab() 有效，但真实渲染时
+        # viewport 独立重绘、拿不到那层内容（表现为默认白底）。事件过滤器在
+        # 原生绘制之前执行，条目/文字随后叠加，顺序有保证。
+        if obj is self.viewport() and event.type() == QEvent.Paint:
+            self._paint_bg(obj)
+        return super().eventFilter(obj, event)
+
+    def set_bg_pixmap(self, pixmap):
+        """设置/更换背景图（传空 QPixmap 表示移除）"""
+        self._bg_pixmap = QPixmap(pixmap)
+        self._bg_scaled = None
+        self.update()
+
+    def set_bg_opacity(self, opacity):
+        """设置背景图不透明度（0.0~1.0，超出范围自动截断）"""
+        self._bg_opacity = max(0.0, min(1.0, float(opacity)))
+        self.update()
+
+    def _bg_cover_pixmap(self, w, h):
+        """返回按 (w, h) cover 裁剪后的缓存图（无图时返回 None）。
+
+        高分屏适配：缩放目标是物理像素（逻辑尺寸 × devicePixelRatio），并把
+        结果 DPR 设回控件值——否则 1x 图被二次拉伸到物理分辨率导致发糊。
+        缓存键含 DPR，跨屏拖动（DPR 变化）时自动重建。"""
+        if self._bg_pixmap.isNull() or w <= 0 or h <= 0:
+            return None
+        dpr = self.devicePixelRatioF() or 1.0
+        key = (w, h, dpr)
+        if self._bg_scaled is None or self._bg_scaled_size != key:
+            # 取较大缩放比才能完全铺满（KeepAspectRatioByExpanding 语义），
+            # 多出部分由目标区域自然裁掉，实现"适应裁剪、不拉伸"
+            s = max(w / self._bg_pixmap.width(), h / self._bg_pixmap.height())
+            tw = max(1, round(self._bg_pixmap.width() * s * dpr))
+            th = max(1, round(self._bg_pixmap.height() * s * dpr))
+            self._bg_scaled = self._bg_pixmap.scaled(
+                tw, th, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+            self._bg_scaled.setDevicePixelRatio(dpr)
+            self._bg_scaled_size = key
+        return self._bg_scaled
+
+    def _paint_bg(self, target):
+        """在 target（通常是 viewport）上绘制底色与背景图"""
+        p = QPainter(target)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        p.fillRect(target.rect(), QColor(dark_paint_hex(self._bg_base)))
+        dpr = target.devicePixelRatioF() or 1.0
+        pm = self._bg_cover_pixmap(target.width(), target.height())
+        if pm is not None and self._bg_opacity > 0:
+            p.setOpacity(self._bg_opacity)
+            # drawPixmap 按逻辑坐标绘制；PM 自带 DPR，实际输出为物理分辨率
+            lw = pm.width() / dpr
+            lh = pm.height() / dpr
+            p.drawPixmap(round((target.width() - lw) / 2),
+                         round((target.height() - lh) / 2), pm)
+        p.end()
+
+
+class BgTableWidget(_BgImageMixin, QTableWidget):
+    """带 cover 背景图的表格（配套 QSS 背景需为 transparent）"""
+    def __init__(self, base_color, parent=None):
+        QTableWidget.__init__(self, parent)
+        self._init_bg_image(base_color)
+
+
+class BgScrollArea(_BgImageMixin, QScrollArea):
+    """带 cover 背景图的滚动区（背景固定不随内容滚动；内层 widget 背景需为 transparent）"""
+    def __init__(self, base_color, parent=None):
+        QScrollArea.__init__(self, parent)
+        self._init_bg_image(base_color)
+
+
+class BgWidget(_BgImageMixin, QWidget):
+    """带 cover 背景图的普通容器（自身 paintEvent 直接绘制，无 viewport）"""
+    def __init__(self, base_color, parent=None):
+        QWidget.__init__(self, parent)
+        self._init_bg_image(base_color)
+        # 关键：普通 QWidget 的 QSS 背景（如 transparent）需 WA_StyledBackground
+        # 才参与绘制；这里由 _paint_bg 自绘底色，需关掉 styled background，
+        # 否则 QSS 底色会盖在 paintEvent 内容之上
+        self.setAttribute(Qt.WA_StyledBackground, False)
+
+    def paintEvent(self, event):
+        self._paint_bg(self)
+        super().paintEvent(event)

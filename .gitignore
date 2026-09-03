@@ -10,6 +10,7 @@ dist/
 
 # 运行时生成的用户数据（保留目录结构可忽略内容）
 config/*.json
+config/*.png
 songs/*
 !songs/.gitkeep
 cache/*
